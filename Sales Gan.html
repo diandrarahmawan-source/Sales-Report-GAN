@@ -1,0 +1,1160 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pembagi Komisi Penjualan (Sales Commission Splitter)</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load Inter Font -->
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7f7f7;
+        }
+        .main-card {
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        }
+        .loading-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(255, 255, 255, 0.8);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="loading-overlay">
+        <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+        <p class="ml-3 text-indigo-600 font-semibold">Memuat Data...</p>
+    </div>
+
+    <div class="container mx-auto p-4 md:p-8">
+        <header class="text-center mb-8">
+            <h1 class="text-4xl font-extrabold text-indigo-800">Sales Commission Splitter</h1>
+            <!-- KOREKSI TEKS DAN TAMBAH WATERMARK -->
+            <p class="text-lg text-gray-600">Alat Akurat untuk Pembagian Komisi GAN Properti</p>
+            <p class="text-xs text-gray-400 mt-1">by : diandrarahmawan</p>
+        </header>
+
+        <!-- Navigation Buttons -->
+        <nav class="flex justify-center space-x-4 mb-8 text-sm md:text-base">
+            <button id="nav-add" class="px-3 py-2 md:px-6 md:py-3 rounded-xl font-semibold transition-all shadow-md bg-indigo-600 text-white hover:bg-indigo-700">
+                ➕ Transaksi
+            </button>
+            <button id="nav-summary" class="px-3 py-2 md:px-6 md:py-3 rounded-xl font-semibold transition-all shadow-md bg-white text-indigo-600 border border-indigo-600 hover:bg-indigo-50">
+                📊 Ringkasan
+            </button>
+            <!-- NEW: Tombol Proses & Status Transaksi -->
+            <button id="nav-status" class="px-3 py-2 md:px-6 md:py-3 rounded-xl font-semibold transition-all shadow-md bg-white text-indigo-600 border border-indigo-600 hover:bg-indigo-50">
+                ⚙️ Status Transaksi
+            </button>
+            <!-- NEW: Tombol Komisi Bersih -->
+            <button id="nav-net-commission" class="px-3 py-2 md:px-6 md:py-3 rounded-xl font-semibold transition-all shadow-md bg-white text-indigo-600 border border-indigo-600 hover:bg-indigo-50">
+                💵 Komisi Bersih
+            </button>
+        </nav>
+
+        <!-- Main Content View -->
+        <div id="app-content">
+            <!-- Content will be injected here -->
+        </div>
+
+        <!-- Custom Modal for Messages -->
+        <div id="message-modal" class="fixed inset-0 bg-gray-600 bg-opacity-75 hidden z-50 flex items-center justify-center">
+            <div class="bg-white p-6 rounded-xl shadow-2xl max-w-sm w-full transform transition-all duration-300 scale-95">
+                <h3 id="modal-title" class="text-xl font-bold mb-4 text-indigo-600">Pesan</h3>
+                <p id="modal-body" class="text-gray-700 mb-6">Isi pesan</p>
+                <button id="modal-close-btn" class="w-full px-4 py-2 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition duration-150">Tutup</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Firebase Imports -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        // Import updateDoc for status updates
+        import { getFirestore, doc, setDoc, onSnapshot, collection, query, addDoc, serverTimestamp, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global variables provided by the environment
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let db, auth, userId = null;
+        let isAuthReady = false;
+        
+        // Global variable to hold all raw commission data for client-side filtering
+        window.currentAllCommissions = []; 
+        // Global variable to hold the currently filtered and aggregated summary data
+        window.currentSummaryData = []; 
+        // NEW: Global variable to hold all raw transaction data for status view
+        window.currentAllTransactions = [];
+
+        // --- Data Mockup (Sales List) ---
+        const SALES_LIST = [
+            { id: 1, name: "Diandra" },
+            { id: 2, name: "Miftah" },
+            { id: 3, name: "Dewan" },
+            { id: 4, name: "Arman" },
+            { id: 5, name: "Kusnandar" },
+            { id: 6, name: "Gunawan" },
+            { id: 7, name: "Nury" },
+            { id: 8, "name": "Anto" },
+            { id: 9, "name": "Dewi" }
+        ];
+
+        // NEW: Status options
+        const TRANSACTION_STATUSES = {
+            AKAD: { label: 'AKAD (Sukses)', color: 'bg-green-100 text-green-800' },
+            PROSES_BANK: { label: 'PROSES BANK', color: 'bg-yellow-100 text-yellow-800' },
+            COLLECT_DATA: { label: 'COLLECT DATA', color: 'bg-blue-100 text-blue-800' },
+            BATAL_REJECT: { label: 'BATAL / REJECT', color: 'bg-red-100 text-red-800' }
+        };
+        const DEFAULT_STATUS = 'COLLECT_DATA';
+
+
+        // --- Utility Functions ---
+
+        /**
+         * Mengubah angka menjadi format Rupiah (Rp).
+         * @param {number} number
+         * @returns {string}
+         */
+        function formatRupiah(number) {
+            if (number === undefined || number === null || isNaN(number)) return 'Rp 0';
+            const cleanNumber = Math.round(number);
+            return new Intl.NumberFormat('id-ID', {
+                style: 'currency',
+                currency: 'IDR',
+                minimumFractionDigits: 0,
+                maximumFractionDigits: 0
+            }).format(cleanNumber);
+        }
+
+        /**
+         * Menampilkan modal pesan kustom.
+         * @param {string} title
+         * @param {string} body
+         */
+        function showModal(title, body) {
+            document.getElementById('modal-title').textContent = title;
+            document.getElementById('modal-body').textContent = body;
+            document.getElementById('message-modal').classList.remove('hidden');
+            document.getElementById('message-modal').classList.add('flex');
+        }
+
+        document.getElementById('modal-close-btn').addEventListener('click', () => {
+            document.getElementById('message-modal').classList.add('hidden');
+            document.getElementById('message-modal').classList.remove('flex');
+        });
+
+        function showLoading() {
+            document.getElementById('loading-overlay').style.display = 'flex';
+        }
+
+        function hideLoading() {
+            document.getElementById('loading-overlay').style.display = 'none';
+        }
+
+        // --- Firebase Initialization and Auth ---
+
+        async function initFirebase() {
+            if (!firebaseConfig) {
+                console.error("Firebase Config tidak ditemukan.");
+                showModal("Kesalahan Konfigurasi", "Aplikasi tidak dapat terhubung ke database. Periksa konfigurasi Firebase.");
+                return;
+            }
+
+            try {
+                setLogLevel('Debug');
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+
+                // Sign in logic
+                await new Promise((resolve) => {
+                    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+                        if (user) {
+                            userId = user.uid;
+                        } else {
+                            if (initialAuthToken) {
+                                await signInWithCustomToken(auth, initialAuthToken).catch(e => {
+                                    console.error("Error signing in with custom token:", e);
+                                    // Fallback to anonymous sign-in if custom token fails
+                                    signInAnonymously(auth);
+                                });
+                            } else {
+                                await signInAnonymously(auth);
+                            }
+                            userId = auth.currentUser ? auth.currentUser.uid : crypto.randomUUID();
+                        }
+                        isAuthReady = true;
+                        unsubscribe(); // Stop listening after first state change
+                        resolve();
+                    });
+                });
+
+                console.log(`Firebase initialized. User ID: ${userId}`);
+                // Start the app after auth is ready
+                setupNavigation();
+                setupAllListeners(); // Setup listeners for both commissions and transactions
+                renderView(currentView);
+            } catch (error) {
+                console.error("Error initializing Firebase:", error);
+                showModal("Kesalahan Firebase", `Gagal menginisialisasi Firebase: ${error.message}`);
+            }
+        }
+
+        // Setup both listeners (commissions and transactions)
+        function setupAllListeners() {
+             setupSummaryListener();
+             setupTransactionListener();
+        }
+
+        // --- Core Application Logic (Calculations & Saves) ---
+
+        const COMMISSION_RATES = {
+            LEAD_GEN: 0.25,
+            TELEMARKETING: 0.25,
+            CONVERSION: 0.50,
+            COMBINED: 0.75 // 25% + 50%
+        };
+
+        const TAX_RATE = 0.18; // 18% Pajak Penjualan
+        const SALES_FEE_RATE = 0.02; // 2% Fee Sales
+
+        /**
+         * Menghitung pembagian komisi berdasarkan logika bisnis. (Tidak berubah)
+         */
+        function calculateSplit(price, leadGens, telemarketing, conversion) {
+            const total = price;
+            const results = [];
+            const leadgensCount = leadGens.length;
+            // ... (Calculation logic remains the same) ...
+            
+            // 1. Lead Generator Share (25% split equally)
+            if (leadgensCount > 0) {
+                const leadgenPool = total * COMMISSION_RATES.LEAD_GEN;
+                const leadgenShare = Math.round(leadgenPool / leadgensCount);
+                const leadgenPercentage = COMMISSION_RATES.LEAD_GEN / leadgensCount * 100;
+
+                leadGens.forEach(name => {
+                    const salesPerson = SALES_LIST.find(s => s.name === name);
+                    results.push({
+                        sales_id: salesPerson.id,
+                        name: name,
+                        role: 'Lead Generator',
+                        percentage: leadgenPercentage,
+                        amount: leadgenShare
+                    });
+                });
+            }
+
+            const isCombined = telemarketing === conversion;
+
+            // 2. Telemarketing Share (25%) and Conversion Share (50%)
+            if (isCombined) {
+                // Combined Role (Telemarketing + Conversion)
+                const combinedShare = Math.round(total * COMMISSION_RATES.COMBINED);
+                const salesPerson = SALES_LIST.find(s => s.name === telemarketing);
+                results.push({
+                    sales_id: salesPerson.id,
+                    name: telemarketing,
+                    role: 'Telemarketing & Conversion',
+                    percentage: COMMISSION_RATES.COMBINED * 100,
+                    amount: combinedShare
+                });
+            } else {
+                // Separate Roles
+                const teleShare = Math.round(total * COMMISSION_RATES.LEAD_GEN); // 25%
+                const convShare = Math.round(total * COMMISSION_RATES.CONVERSION); // 50%
+
+                // Telemarketing (25%)
+                const telePerson = SALES_LIST.find(s => s.name === telemarketing);
+                results.push({
+                    sales_id: telePerson.id,
+                    name: telemarketing,
+                    role: 'Telemarketing',
+                    percentage: COMMISSION_RATES.LEAD_GEN * 100,
+                    amount: teleShare
+                });
+
+                // Conversion (50%)
+                const convPerson = SALES_LIST.find(s => s.name === conversion);
+                results.push({
+                    sales_id: convPerson.id,
+                    name: conversion,
+                    role: 'Lead Conversion',
+                    percentage: COMMISSION_RATES.CONVERSION * 100,
+                    amount: convShare
+                });
+            }
+
+            return results;
+        }
+        
+        /**
+         * Mendapatkan tanggal mulai dan akhir berdasarkan pilihan filter. (Tidak berubah)
+         */
+        function getFilterDates(range, startDateString, endDateString) {
+            const now = new Date();
+            let startDate = null;
+            let endDate = null;
+
+            if (startDateString && endDateString && range === 'custom') {
+                startDate = startDateString;
+                endDate = endDateString;
+            } else {
+                const today = now.toISOString().split('T')[0];
+
+                switch (range) {
+                    case 'day':
+                        startDate = today;
+                        endDate = today;
+                        break;
+                    case 'week':
+                        // Menghitung awal minggu (Senin) dan akhir minggu (Minggu)
+                        const dayOfWeek = now.getDay(); // 0 (Minggu) - 6 (Sabtu)
+                        // Adjust to Monday (1)
+                        const diffToMonday = now.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1); 
+                        
+                        let startOfWeek = new Date(now.getFullYear(), now.getMonth(), diffToMonday);
+                        
+                        let endOfWeek = new Date(startOfWeek);
+                        endOfWeek.setDate(startOfWeek.getDate() + 6);
+                        
+                        startDate = startOfWeek.toISOString().split('T')[0];
+                        endDate = endOfWeek.toISOString().split('T')[0];
+                        break;
+                    case 'month':
+                        // Awal dan akhir bulan ini
+                        const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+                        const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+
+                        startDate = firstDay.toISOString().split('T')[0];
+                        endDate = lastDay.toISOString().split('T')[0];
+                        break;
+                    case 'all':
+                    default:
+                        break; // Tetap null/kosong
+                }
+            }
+            
+            return { startDate, endDate };
+        }
+
+
+        // --- View: Add Transaction ---
+
+        function renderAddTransactionView() {
+            const date = new Date().toISOString().split('T')[0];
+            const content = document.createElement('div');
+            content.className = 'grid md:grid-cols-2 gap-8';
+            content.innerHTML = `
+                <div id="input-card" class="bg-white p-6 rounded-xl main-card h-fit">
+                    <h2 class="text-2xl font-bold mb-4 text-indigo-700">Input Transaksi Baru</h2>
+                    <p class="text-sm text-gray-500 mb-4">ID Pengguna: <span class="font-mono text-xs text-indigo-500">${userId}</span></p>
+
+                    <form id="transaction-form" class="space-y-4">
+                        <div>
+                            <label for="price" class="block text-sm font-medium text-gray-700">Harga Properti (Rp)</label>
+                            <input type="number" id="price" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm p-3 focus:border-indigo-500 focus:ring focus:ring-indigo-200 focus:ring-opacity-50" placeholder="Contoh: 1000000000" min="1000000" required>
+                        </div>
+                        <div>
+                            <label for="date" class="block text-sm font-medium text-gray-700">Tanggal Transaksi</label>
+                            <input type="date" id="date" value="${date}" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm p-3 focus:border-indigo-500 focus:ring focus:ring-indigo-200 focus:ring-opacity-50" required>
+                        </div>
+                        
+                        <!-- START: BAGIAN LEAD GENERATOR DIUBAH MENJADI CHECKBOX -->
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">Lead Generator (25% - Dapat Pilih Maks. 10)</label>
+                            <div id="leadgens-checkbox-container" class="mt-1 border border-gray-300 rounded-lg p-3 bg-gray-50 grid grid-cols-2 md:grid-cols-3 gap-2 max-h-40 overflow-y-auto">
+                                ${SALES_LIST.map(s => `
+                                    <label class="flex items-center space-x-2 text-sm text-gray-700 cursor-pointer hover:text-indigo-600 transition">
+                                        <input type="checkbox" name="leadgen_name" value="${s.name}" class="rounded text-indigo-600 focus:ring-indigo-500 border-gray-300">
+                                        <span>${s.name}</span>
+                                    </label>
+                                `).join('')}
+                            </div>
+                            <p id="leadgen-help-text" class="text-xs text-gray-500 mt-1">Ceklis nama staf yang terlibat sebagai Lead Generator. (Maksimal 10).</p>
+                        </div>
+                        <!-- END: BAGIAN LEAD GENERATOR DIUBAH MENJADI CHECKBOX -->
+
+                        <div>
+                            <label for="telemarketing" class="block text-sm font-medium text-gray-700">Telemarketing (25% - Pilih Satu)</label>
+                            <select id="telemarketing" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm p-3 focus:border-indigo-500 focus:ring focus:ring-indigo-200 focus:ring-opacity-50" required>
+                                <option value="" disabled selected>Pilih Staf Telemarketing</option>
+                                ${SALES_LIST.map(s => `<option value="${s.name}">${s.name}</option>`).join('')}
+                            </select>
+                        </div>
+                        <div>
+                            <label for="conversion" class="block text-sm font-medium text-gray-700">Lead Conversion (50% - Pilih Satu)</label>
+                            <select id="conversion" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm p-3 focus:border-indigo-500 focus:ring focus:ring-indigo-200 focus:ring-opacity-50" required>
+                                <option value="" disabled selected>Pilih Staf Lead Conversion</option>
+                                ${SALES_LIST.map(s => `<option value="${s.name}">${s.name}</option>`).join('')}
+                            </select>
+                        </div>
+                        <button type="button" id="calculate-btn" class="w-full px-4 py-3 bg-green-600 text-white font-bold rounded-xl hover:bg-green-700 transition duration-150 shadow-lg shadow-green-200">
+                            🧮 Hitung Pembagian Komisi
+                        </button>
+                    </form>
+                </div>
+
+                <div id="result-card" class="bg-white p-6 rounded-xl main-card hidden">
+                    <h2 class="text-2xl font-bold mb-4 text-indigo-700">Hasil Pembagian Komisi</h2>
+                    <div id="calculation-output" class="mb-6">
+                        <p class="text-gray-600 mb-2"><span class="font-semibold">Harga Properti:</span> <span id="output-price" class="text-lg font-bold text-red-600"></span></p>
+                        <p class="text-gray-600 mb-4"><span class="font-semibold">Total Komisi (100%):</span> <span id="output-total-commission" class="text-lg font-bold text-green-600"></span></p>
+                    </div>
+
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-indigo-50">
+                                <tr>
+                                    <th class="px-3 py-3 text-left text-xs font-medium text-indigo-600 uppercase tracking-wider">Staf Penjualan</th>
+                                    <th class="px-3 py-3 text-left text-xs font-medium text-indigo-600 uppercase tracking-wider">Peran</th>
+                                    <th class="px-3 py-3 text-right text-xs font-medium text-indigo-600 uppercase tracking-wider">Persentase</th>
+                                    <th class="px-3 py-3 text-right text-xs font-medium text-indigo-600 uppercase tracking-wider">Nominal (Rp)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="commission-table-body" class="bg-white divide-y divide-gray-200">
+                                <!-- Results here -->
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <button type="button" id="save-btn" class="w-full mt-6 px-4 py-3 bg-indigo-600 text-white font-bold rounded-xl hover:bg-indigo-700 transition duration-150 shadow-lg shadow-indigo-200" disabled>
+                        💾 Simpan Transaksi (Status Awal: ${TRANSACTION_STATUSES[DEFAULT_STATUS].label})
+                    </button>
+                </div>
+            `;
+            document.getElementById('app-content').appendChild(content);
+
+            // Attach event listeners
+            document.getElementById('calculate-btn').addEventListener('click', handleCalculate);
+            document.getElementById('save-btn').addEventListener('click', handleSaveTransaction);
+
+            // NEW: Enforce Max 10 Lead Generators using Checkboxes
+            const leadgensContainer = document.getElementById('leadgens-checkbox-container');
+            const checkboxes = leadgensContainer.querySelectorAll('input[name="leadgen_name"]');
+            const helpText = document.getElementById('leadgen-help-text');
+
+            checkboxes.forEach(checkbox => {
+                checkbox.addEventListener('change', (event) => {
+                    const checkedCount = leadgensContainer.querySelectorAll('input[name="leadgen_name"]:checked').length;
+                    
+                    if (checkedCount > 10) {
+                        showModal("Batas Maksimum", "Maksimal hanya 10 Lead Generator yang dapat dipilih.");
+                        event.target.checked = false; // Uncheck the box that caused the overflow
+                    }
+                    
+                    if (checkedCount >= 10) {
+                        helpText.textContent = "Batas maksimal 10 Lead Generator telah tercapai.";
+                        helpText.classList.remove('text-gray-500');
+                        helpText.classList.add('text-red-500');
+                    } else {
+                        helpText.textContent = "Ceklis nama staf yang terlibat sebagai Lead Generator. (Maksimal 10).";
+                        helpText.classList.add('text-gray-500');
+                        helpText.classList.remove('text-red-500');
+                    }
+                });
+            });
+        }
+
+        let latestCommissionDetails = [];
+
+        function handleCalculate() {
+            const priceEl = document.getElementById('price');
+            const telemarketingEl = document.getElementById('telemarketing');
+            const conversionEl = document.getElementById('conversion');
+
+            const price = parseFloat(priceEl.value);
+            // UPDATE: Baca dari Checkboxes
+            const selectedLeadGens = Array.from(document.querySelectorAll('#leadgens-checkbox-container input[name="leadgen_name"]:checked')).map(input => input.value);
+            
+            const telemarketing = telemarketingEl.value;
+            const conversion = conversionEl.value;
+
+            if (!price || price <= 0) {
+                showModal("Kesalahan Input", "Harga Properti harus diisi dengan angka yang valid.");
+                return;
+            }
+            if (selectedLeadGens.length === 0) {
+                showModal("Kesalahan Input", "Minimal harus memilih satu Lead Generator.");
+                return;
+            }
+            if (!telemarketing || !conversion) {
+                showModal("Kesalahan Input", "Semua peran (Telemarketing dan Conversion) harus dipilih.");
+                return;
+            }
+
+            latestCommissionDetails = calculateSplit(price, selectedLeadGens, telemarketing, conversion);
+
+            // Display Results
+            const totalCommission = latestCommissionDetails.reduce((sum, item) => sum + item.amount, 0);
+            
+            document.getElementById('output-price').textContent = formatRupiah(price);
+            document.getElementById('output-total-commission').textContent = formatRupiah(totalCommission);
+
+            const tableBody = document.getElementById('commission-table-body');
+            tableBody.innerHTML = ''; // Clear previous results
+            
+            latestCommissionDetails.forEach(detail => {
+                const row = tableBody.insertRow();
+                row.className = 'hover:bg-gray-50';
+                
+                const nameCell = row.insertCell();
+                nameCell.textContent = detail.name;
+                nameCell.className = 'px-3 py-3 whitespace-nowrap text-sm font-medium text-gray-900';
+                
+                const roleCell = row.insertCell();
+                roleCell.textContent = detail.role;
+                roleCell.className = 'px-3 py-3 whitespace-nowrap text-sm text-gray-500';
+                
+                const percentageCell = row.insertCell();
+                percentageCell.textContent = `${detail.percentage.toFixed(2)}%`;
+                percentageCell.className = 'px-3 py-3 whitespace-nowrap text-sm text-gray-500 text-right font-mono';
+                
+                const nominalCell = row.insertCell();
+                nominalCell.textContent = formatRupiah(detail.amount);
+                nominalCell.className = 'px-3 py-3 whitespace-nowrap text-sm font-bold text-right text-indigo-600';
+            });
+
+            // Show result card and enable save button
+            document.getElementById('result-card').classList.remove('hidden');
+            document.getElementById('save-btn').removeAttribute('disabled');
+        }
+
+        async function handleSaveTransaction() {
+            if (!db || !userId) {
+                showModal("Kesalahan Database", "Koneksi database belum siap. Coba refresh.");
+                return;
+            }
+
+            if (latestCommissionDetails.length === 0) {
+                showModal("Kesalahan Simpan", "Anda harus menghitung komisi terlebih dahulu.");
+                return;
+            }
+
+            const price = parseFloat(document.getElementById('price').value);
+            const date = document.getElementById('date').value; 
+            const leadgensNames = Array.from(document.querySelectorAll('#leadgens-checkbox-container input[name="leadgen_name"]:checked')).map(input => input.value);
+
+            const telemarketingName = document.getElementById('telemarketing').value;
+            const conversionName = document.getElementById('conversion').value;
+
+            // Map names to IDs for saving
+            const leadgensIds = leadgensNames.map(name => SALES_LIST.find(s => s.name === name).id);
+            const telemarketingId = SALES_LIST.find(s => s.name === telemarketingName).id;
+            const conversionId = SALES_LIST.find(s => s.name === conversionName).id;
+
+            showLoading();
+
+            try {
+                // 1. Save Transaction to 'transactions' collection
+                const transactionsRef = collection(db, 'artifacts', appId, 'users', userId, 'transactions');
+                const newTransaction = {
+                    price: price,
+                    date: date,
+                    leadgens: leadgensIds, // Array of IDs
+                    telemarketing_id: telemarketingId,
+                    conversion_id: conversionId,
+                    status: DEFAULT_STATUS, // NEW: Status Awal
+                    timestamp: serverTimestamp()
+                };
+
+                const transactionDocRef = await addDoc(transactionsRef, newTransaction);
+                const transactionId = transactionDocRef.id;
+
+                // 2. Save Commission Details to 'commission_details' collection
+                const detailsRef = collection(db, 'artifacts', appId, 'users', userId, 'commission_details');
+                
+                const detailPromises = latestCommissionDetails.map(detail => {
+                    return addDoc(detailsRef, {
+                        transaction_id: transactionId,
+                        sales_id: detail.sales_id,
+                        role: detail.role.toLowerCase().replace(/ /g, '_').replace('&', 'and'), 
+                        percentage: detail.percentage,
+                        amount: detail.amount,
+                        date: date, 
+                    });
+                });
+
+                await Promise.all(detailPromises);
+
+                hideLoading();
+                showModal("Berhasil!", `Transaksi ${transactionId.substring(0, 6)} (${formatRupiah(price)}) berhasil disimpan dengan status: ${TRANSACTION_STATUSES[DEFAULT_STATUS].label}.`);
+                
+                // Reset Form and Results
+                document.getElementById('transaction-form').reset();
+                document.getElementById('date').value = new Date().toISOString().split('T')[0]; 
+                document.getElementById('commission-table-body').innerHTML = '';
+                document.getElementById('result-card').classList.add('hidden');
+                document.getElementById('save-btn').setAttribute('disabled', 'true');
+
+            } catch (e) {
+                hideLoading();
+                console.error("Error saving document: ", e);
+                showModal("Kesalahan Simpan", `Gagal menyimpan data: ${e.message}`);
+            }
+        }
+
+
+        // --- View: Transaction Status (NEW) ---
+        
+        let unsubscribeTransactions = null;
+
+        function setupTransactionListener() {
+            if (unsubscribeTransactions) {
+                unsubscribeTransactions();
+            }
+            if (!db || !userId) return;
+
+            const transactionsRef = collection(db, 'artifacts', appId, 'users', userId, 'transactions');
+            
+            // Listen for real-time updates on all transactions
+            unsubscribeTransactions = onSnapshot(transactionsRef, (snapshot) => {
+                window.currentAllTransactions = [];
+                snapshot.forEach(doc => {
+                    window.currentAllTransactions.push({ id: doc.id, ...doc.data() });
+                });
+                
+                // If currently viewing the status page, update the table
+                if (currentView === 'status') {
+                    updateTransactionStatusTable();
+                }
+
+                // --- FIX START: Memicu update ringkasan/komisi bersih saat status transaksi berubah ---
+                if (window.currentAllCommissions.length > 0) {
+                    // Ambil nilai filter saat ini secara aman (perlu dicek karena elemen mungkin belum dirender)
+                    const filterRangeEl = document.getElementById('filter-range');
+                    const range = filterRangeEl ? filterRangeEl.value : 'all';
+                    const startDate = document.getElementById('filter-start-date')?.value || '';
+                    const endDate = document.getElementById('filter-end-date')?.value || '';
+                    
+                    // Panggil updateSummaryTable untuk memperbarui agregasi dengan status terbaru
+                    updateSummaryTable(window.currentAllCommissions, range, startDate, endDate);
+                }
+                // --- FIX END ---
+
+            }, (error) => {
+                console.error("Error listening to transactions:", error);
+            });
+        }
+        
+        function renderTransactionStatusView() {
+            const content = document.createElement('div');
+            content.className = 'bg-white p-6 rounded-xl main-card';
+            content.innerHTML = `
+                <h2 class="text-2xl font-bold mb-6 text-indigo-700">⚙️ Proses & Status Transaksi</h2>
+                <p class="text-sm text-gray-500 mb-4">Ubah status transaksi. Hanya transaksi berstatus <span class="font-bold text-green-700">AKAD (Sukses)</span> yang akan masuk perhitungan Komisi Bersih.</p>
+
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-indigo-600">
+                            <tr>
+                                <th class="px-3 py-3 text-left text-xs font-medium text-white uppercase tracking-wider">Kode Transaksi</th>
+                                <th class="px-3 py-3 text-left text-xs font-medium text-white uppercase tracking-wider">Tanggal & Harga</th>
+                                <th class="px-3 py-3 text-left text-xs font-medium text-white uppercase tracking-wider">Transaksi</th>
+                                <th class="px-3 py-3 text-center text-xs font-medium text-white uppercase tracking-wider">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="status-table-body" class="bg-white divide-y divide-gray-200">
+                            <tr><td colspan="4" class="text-center py-4 text-gray-500">Memuat data transaksi...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            `;
+            document.getElementById('app-content').appendChild(content);
+            updateTransactionStatusTable();
+        }
+
+        function updateTransactionStatusTable() {
+            const tableBody = document.getElementById('status-table-body');
+            if (!tableBody) return;
+            
+            tableBody.innerHTML = '';
+            
+            if (window.currentAllTransactions.length === 0) {
+                 tableBody.innerHTML = `<tr><td colspan="4" class="text-center py-4 text-gray-500">Belum ada transaksi yang tersimpan.</td></tr>`;
+                 return;
+            }
+            
+            // Sort by Date descending
+            window.currentAllTransactions.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+            window.currentAllTransactions.forEach(trans => {
+                const row = tableBody.insertRow();
+                row.className = 'hover:bg-gray-50';
+                
+                // Get names for display
+                const telemarketingName = SALES_LIST.find(s => s.id === trans.telemarketing_id)?.name || 'N/A';
+                const conversionName = SALES_LIST.find(s => s.id === trans.conversion_id)?.name || 'N/A';
+                const leadGenCount = trans.leadgens.length;
+
+
+                const idCell = row.insertCell();
+                idCell.innerHTML = `<span class="font-mono text-xs text-indigo-600">${trans.id.substring(0, 8)}</span>`;
+                idCell.className = 'px-3 py-3 whitespace-nowrap text-sm font-medium text-gray-900';
+                
+                const detailCell = row.insertCell();
+                detailCell.innerHTML = `
+                    <span class="font-semibold">${formatRupiah(trans.price)}</span>
+                    <br><span class="text-xs text-gray-500">${trans.date}</span>
+                `;
+                detailCell.className = 'px-3 py-3 whitespace-nowrap text-sm text-gray-500';
+
+                const rolesCell = row.insertCell();
+                rolesCell.innerHTML = `
+                    <span class="text-xs text-gray-700 block">LG (${leadGenCount})</span>
+                    <span class="text-xs text-gray-700 block">TM: ${telemarketingName}</span>
+                    <span class="text-xs text-gray-700 block">CV: ${conversionName}</span>
+                `;
+                rolesCell.className = 'px-3 py-3 text-sm text-gray-500';
+
+                const statusCell = row.insertCell();
+                
+                const statusSelect = document.createElement('select');
+                statusSelect.id = `status-${trans.id}`;
+                statusSelect.className = 'p-2 border rounded-lg shadow-sm text-sm font-semibold focus:ring-indigo-500 focus:border-indigo-500 ' + (TRANSACTION_STATUSES[trans.status]?.color || 'bg-gray-200');
+                
+                // Populate options
+                Object.keys(TRANSACTION_STATUSES).forEach(key => {
+                    const option = document.createElement('option');
+                    option.value = key;
+                    option.textContent = TRANSACTION_STATUSES[key].label;
+                    statusSelect.appendChild(option);
+                });
+                statusSelect.value = trans.status;
+                
+                // Event listener for status change
+                statusSelect.addEventListener('change', (e) => updateTransactionStatus(trans.id, e.target.value));
+
+                statusCell.appendChild(statusSelect);
+                statusCell.className = 'px-3 py-3 text-sm text-gray-500 text-center';
+            });
+        }
+
+        async function updateTransactionStatus(transactionId, newStatus) {
+            if (!db || !userId) {
+                showModal("Kesalahan Database", "Koneksi database belum siap. Coba refresh.");
+                return;
+            }
+
+            const transDocRef = doc(db, 'artifacts', appId, 'users', userId, 'transactions', transactionId);
+
+            try {
+                // Update status in transactions collection
+                await updateDoc(transDocRef, { status: newStatus });
+                
+                // Update the select box style immediately
+                const selectEl = document.getElementById(`status-${transactionId}`);
+                if (selectEl) {
+                    selectEl.className = 'p-2 border rounded-lg shadow-sm text-sm font-semibold focus:ring-indigo-500 focus:border-indigo-500 ' + (TRANSACTION_STATUSES[newStatus]?.color || 'bg-gray-200');
+                }
+
+                showModal("Status Diperbarui", `Status transaksi ${transactionId.substring(0, 8)} berhasil diubah menjadi: ${TRANSACTION_STATUSES[newStatus].label}.`);
+                
+                // The onSnapshot listener (setupTransactionListener) will now automatically detect 
+                // this change and trigger the necessary updates for the summary/net-commission views.
+                
+            } catch (e) {
+                console.error("Error updating status:", e);
+                showModal("Gagal Update", `Gagal memperbarui status: ${e.message}`);
+            }
+        }
+
+
+        // --- View: Sales Summary & Net Commission Logic ---
+
+        function renderSalesSummaryView() {
+            // ... (Template remains the same) ...
+            const content = document.createElement('div');
+            content.className = 'bg-white p-6 rounded-xl main-card';
+            content.innerHTML = `
+                <h2 class="text-2xl font-bold mb-6 text-indigo-700">Ringkasan Total Omset Per Staf</h2>
+                <p class="text-sm text-gray-500 mb-4">Omset dihitung berdasarkan total komisi kotor yang diterima staf dalam periode ini.</p>
+                
+                <div class="mb-6 p-4 bg-indigo-50 rounded-lg border border-indigo-200">
+                    <h3 class="font-semibold text-indigo-700 mb-2">Filter Data</h3>
+                    <div class="flex flex-col md:flex-row gap-4">
+                        <select id="filter-range" class="p-2 border rounded-lg w-full md:w-1/3">
+                            <option value="all">Semua Waktu</option>
+                            <option value="day">Hari Ini</option>
+                            <option value="week">Minggu Ini</option>
+                            <option value="month">Bulan Ini</option>
+                            <option value="custom">Rentang Kustom</option>
+                        </select>
+                        <input type="date" id="filter-start-date" class="p-2 border rounded-lg w-full md:w-1/3" title="Tanggal Mulai">
+                        <input type="date" id="filter-end-date" class="p-2 border rounded-lg w-full md:w-1/3" title="Tanggal Akhir">
+                    </div>
+                </div>
+
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-indigo-600">
+                            <tr>
+                                <th class="px-3 py-3 text-left text-xs font-medium text-white uppercase tracking-wider rounded-tl-lg">Staf Penjualan</th>
+                                <th class="px-3 py-3 text-right text-xs font-medium text-white uppercase tracking-wider">Total Transaksi</th>
+                                <th class="px-3 py-3 text-right text-xs font-medium text-white uppercase tracking-wider rounded-tr-lg">Total Omset (Rp)</th> <!-- UPDATED HERE -->
+                            </tr>
+                        </thead>
+                        <tbody id="summary-table-body" class="bg-white divide-y divide-gray-200">
+                            <tr><td colspan="3" class="text-center py-4 text-gray-500">Memuat ringkasan data komisi...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            `;
+            document.getElementById('app-content').appendChild(content);
+            
+            // Attach filter listeners
+            const filterRangeEl = document.getElementById('filter-range');
+            const filterStartEl = document.getElementById('filter-start-date');
+            const filterEndEl = document.getElementById('filter-end-date');
+
+            const applyFilters = () => {
+                if (window.currentAllCommissions) {
+                    const range = filterRangeEl.value;
+                    const startDate = filterStartEl.value;
+                    const endDate = filterEndEl.value;
+                    updateSummaryTable(window.currentAllCommissions, range, startDate, endDate);
+                }
+            };
+            
+            filterRangeEl.addEventListener('change', applyFilters);
+            filterStartEl.addEventListener('change', applyFilters);
+            filterEndEl.addEventListener('change', applyFilters);
+
+
+            // Re-render data if already loaded
+            if (window.currentAllCommissions.length > 0) {
+                const range = filterRangeEl?.value || 'all';
+                const startDate = filterStartEl?.value || '';
+                const endDate = filterEndEl?.value || '';
+                updateSummaryTable(window.currentAllCommissions, range, startDate, endDate);
+            }
+        }
+
+        let unsubscribeSummary = null;
+
+        function setupSummaryListener() {
+            if (unsubscribeSummary) {
+                unsubscribeSummary();
+            }
+            if (!db || !userId) return;
+
+            const detailsRef = collection(db, 'artifacts', appId, 'users', userId, 'commission_details');
+            
+            // Listen for real-time updates on all commission details
+            unsubscribeSummary = onSnapshot(detailsRef, (snapshot) => {
+                const commissions = [];
+                snapshot.forEach(doc => {
+                    commissions.push(doc.data());
+                });
+                window.currentAllCommissions = commissions; // Store raw data globally
+                
+                // Get current filter values (need to check if elements exist since listener is global)
+                const range = document.getElementById('filter-range')?.value || 'all';
+                const startDate = document.getElementById('filter-start-date')?.value || '';
+                const endDate = document.getElementById('filter-end-date')?.value || '';
+
+                // Apply filters (initial load)
+                updateSummaryTable(commissions, range, startDate, endDate);
+            }, (error) => {
+                console.error("Error listening to commission details:", error);
+            });
+        }
+
+        function updateSummaryTable(commissions, range = 'all', filterStartString = '', filterEndString = '') {
+            
+            // Data untuk Map sales harus diambil dari list sales yang ada
+            const salesMap = SALES_LIST.reduce((map, s) => {
+                map.set(s.id, s.name);
+                return map;
+            }, new Map());
+            
+            const { startDate, endDate } = getFilterDates(range, filterStartString, filterEndString);
+
+            // 1. FILTERING STEP (Tanggal)
+            const filteredCommissions = commissions.filter(detail => {
+                // Filter by Date
+                if (startDate && endDate) {
+                    if (!detail.date || detail.date < startDate || detail.date > endDate) return false;
+                }
+                
+                // Ringkasan Penjualan menunjukkan *Total Komisi/Omset* yang didapat staf dari SEMUA status.
+                return true; 
+            });
+
+            // 2. AGGREGATION STEP
+            const summaryMap = new Map();
+            const transactionStatusMap = window.currentAllTransactions.reduce((map, trans) => {
+                map.set(trans.id, trans.status);
+                return map;
+            }, new Map());
+
+            SALES_LIST.forEach(s => {
+                summaryMap.set(s.id, {
+                    id: s.id, // Tambahkan ID untuk referensi
+                    name: s.name,
+                    totalCommission: 0,
+                    totalTransactions: 0,
+                    transactionIds: new Set()
+                });
+            });
+
+            // Agregasi data yang sudah difilter
+            filteredCommissions.forEach(detail => {
+                if (summaryMap.has(detail.sales_id)) {
+                    const data = summaryMap.get(detail.sales_id);
+                    data.totalCommission += detail.amount;
+                    data.transactionIds.add(detail.transaction_id);
+                }
+            });
+
+            const summaryArray = Array.from(summaryMap.values()).map(data => ({
+                name: data.name,
+                totalCommission: data.totalCommission,
+                totalTransactions: data.transactionIds.size,
+                // Calculate AKAD Commission for Net Commission View
+                akadCommission: Array.from(data.transactionIds).reduce((sum, transId) => {
+                    const status = transactionStatusMap.get(transId);
+                    
+                    if (status === 'AKAD') {
+                        // Cari komisi yang terkait dengan ID transaksi dan ID Sales ini
+                        const commissionDetail = filteredCommissions.find(c => c.transaction_id === transId && c.sales_id === data.id); 
+                        return sum + (commissionDetail ? commissionDetail.amount : 0);
+                    }
+                    return sum;
+                }, 0)
+            })).filter(data => data.totalCommission > 0); 
+
+            // Store aggregated data for Net Commission View
+            window.currentSummaryData = summaryArray;
+            
+            // Urutkan berdasarkan total komisi menurun
+            summaryArray.sort((a, b) => b.totalCommission - a.totalCommission);
+
+            // 3. RENDER TABLE (Pilih tampilan yang sedang aktif)
+            if (currentView === 'summary') {
+                const tableBody = document.getElementById('summary-table-body');
+                if (!tableBody) return; 
+                
+                tableBody.innerHTML = '';
+                
+                if (summaryArray.length === 0) {
+                     tableBody.innerHTML = `<tr><td colspan="3" class="text-center py-4 text-gray-500">Tidak ada omset yang tercatat dalam periode ini.</td></tr>`;
+                } else {
+                    summaryArray.forEach(data => {
+                        const row = tableBody.insertRow();
+                        row.className = 'hover:bg-gray-50';
+                        
+                        const nameCell = row.insertCell();
+                        nameCell.textContent = data.name;
+                        nameCell.className = 'px-3 py-3 whitespace-nowrap text-sm font-medium text-gray-900';
+                        
+                        const transactionsCell = row.insertCell();
+                        transactionsCell.textContent = data.totalTransactions;
+                        transactionsCell.className = 'px-3 py-3 whitespace-nowrap text-sm text-gray-500 text-right';
+
+                        const commissionCell = row.insertCell();
+                        commissionCell.textContent = formatRupiah(data.totalCommission);
+                        commissionCell.className = 'px-3 py-3 whitespace-nowrap text-sm font-bold text-right text-green-600';
+                    });
+                }
+            } else if (currentView === 'net-commission') {
+                // Jika tampilan sedang di Komisi Bersih, panggil fungsi update-nya
+                updateNetCommissionTable(summaryArray, range, startDate, endDate);
+            }
+        }
+        
+        // --- View: Net Sales Commission ---
+        
+        function renderNetCommissionView() {
+            // ... (Template remains the same) ...
+            const content = document.createElement('div');
+            content.className = 'bg-white p-6 rounded-xl main-card';
+            content.innerHTML = `
+                <h2 class="text-2xl font-bold mb-6 text-indigo-700">💵 Komisi Bersih Sales (Hanya AKAD)</h2>
+                <div class="mb-4 text-sm p-3 bg-red-100 text-red-800 rounded-lg">
+                    <p class="font-bold">Ketentuan Perhitungan (HANYA Transaksi status AKAD):</p>
+                    <ul class="list-disc list-inside ml-2">
+                        <li>Omset Bruto: Total Komisi dari transaksi AKAD.</li>
+                        <li>Potongan Pajak Penjualan: <span class="font-mono font-semibold">${(TAX_RATE * 100).toFixed(0)}%</span> dari Omset Bruto.</li>
+                        <li>Komisi Bersih: <span class="font-mono font-semibold">${(SALES_FEE_RATE * 100).toFixed(0)}%</span> dari Omset Setelah Pajak.</li>
+                    </ul>
+                </div>
+                
+                <p id="net-commission-filter-info" class="text-sm text-gray-600 mb-4"></p>
+
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-red-600">
+                            <tr>
+                                <th class="px-3 py-3 text-left text-xs font-medium text-white uppercase tracking-wider rounded-tl-lg">Staf Penjualan</th>
+                                <th class="px-3 py-3 text-right text-xs font-medium text-white uppercase tracking-wider">Omset Bruto (Rp)</th>
+                                <th class="px-3 py-3 text-right text-xs font-medium text-white uppercase tracking-wider">Potongan Pajak 18% (Rp)</th>
+                                <th class="px-3 py-3 text-right text-xs font-medium text-white uppercase tracking-wider">Omset Setelah Pajak (Rp)</th>
+                                <th class="px-3 py-3 text-right text-xs font-medium text-white uppercase tracking-wider rounded-tr-lg">Komisi Bersih 2% (Rp)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="net-commission-table-body" class="bg-white divide-y divide-gray-200">
+                            <tr><td colspan="5" class="text-center py-4 text-gray-500">Data komisi bersih akan muncul di sini.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            `;
+            document.getElementById('app-content').appendChild(content);
+            
+            // Re-run the summary logic to get the latest aggregated data
+            if (window.currentAllCommissions.length > 0) {
+                 const range = document.getElementById('filter-range')?.value || 'all';
+                 const startDate = document.getElementById('filter-start-date')?.value || '';
+                 const endDate = document.getElementById('filter-end-date')?.value || '';
+                 updateSummaryTable(window.currentAllCommissions, range, startDate, endDate);
+            }
+        }
+        
+        function updateNetCommissionTable(summaryData, range, startDate, endDate) {
+            const tableBody = document.getElementById('net-commission-table-body');
+            if (!tableBody) return;
+            
+            tableBody.innerHTML = '';
+            
+            // Filter info display (for user context)
+            const infoEl = document.getElementById('net-commission-filter-info');
+            if (infoEl) {
+                // Determine the range label
+                let dateText;
+                if (range === 'custom' && startDate && endDate) {
+                    dateText = `${startDate} s/d ${endDate}`;
+                } else if (range === 'day') {
+                    dateText = 'Hari Ini';
+                } else if (range === 'week') {
+                    dateText = 'Minggu Ini';
+                } else if (range === 'month') {
+                    dateText = 'Bulan Ini';
+                } else {
+                    dateText = 'Semua Waktu';
+                }
+                
+                infoEl.innerHTML = `Perhitungan ini berdasarkan transaksi berstatus <span class="font-bold text-green-700">AKAD</span> dalam periode: <span class="font-bold">${dateText}</span>.`;
+            }
+
+            // Filter out sales with zero AKAD commission
+            const validSummaryData = summaryData.filter(data => data.akadCommission > 0);
+
+            if (validSummaryData.length === 0) {
+                 tableBody.innerHTML = `<tr><td colspan="5" class="text-center py-4 text-gray-500">Tidak ada transaksi AKAD yang tercatat dalam periode ini.</td></tr>`;
+                 return;
+            }
+            
+            validSummaryData.forEach(data => {
+                // Use akadCommission (Komisi Bruto dari transaksi AKAD saja)
+                const grossCommission = data.akadCommission; 
+                
+                // 1. Potong Pajak 18%
+                const taxAmount = Math.round(grossCommission * TAX_RATE);
+                
+                // 2. Omset Setelah Pajak (Sisa Omset)
+                const netRevenue = grossCommission - taxAmount;
+                
+                // 3. Komisi Bersih 2% dari Omset Setelah Pajak
+                const netFee = Math.round(netRevenue * SALES_FEE_RATE);
+                
+                const row = tableBody.insertRow();
+                row.className = 'hover:bg-gray-50';
+                
+                const nameCell = row.insertCell();
+                nameCell.textContent = data.name;
+                nameCell.className = 'px-3 py-3 whitespace-nowrap text-sm font-medium text-gray-900';
+                
+                const grossCell = row.insertCell();
+                grossCell.textContent = formatRupiah(grossCommission);
+                grossCell.className = 'px-3 py-3 whitespace-nowrap text-sm text-gray-500 text-right font-semibold';
+                
+                const taxCell = row.insertCell();
+                taxCell.textContent = formatRupiah(taxAmount);
+                taxCell.className = 'px-3 py-3 whitespace-nowrap text-sm text-red-600 text-right';
+                
+                const netRevenueCell = row.insertCell();
+                netRevenueCell.textContent = formatRupiah(netRevenue);
+                netRevenueCell.className = 'px-3 py-3 whitespace-nowrap text-sm text-gray-700 text-right';
+
+                const netFeeCell = row.insertCell();
+                netFeeCell.textContent = formatRupiah(netFee);
+                netFeeCell.className = 'px-3 py-3 whitespace-nowrap text-sm font-bold text-right text-green-700 bg-green-50';
+            });
+        }
+
+
+        // --- Navigation Logic ---
+
+        let currentView = 'add'; // 'add', 'summary', 'status', or 'net-commission'
+
+        function setupNavigation() {
+            document.getElementById('nav-add').addEventListener('click', () => setView('add'));
+            document.getElementById('nav-summary').addEventListener('click', () => setView('summary'));
+            document.getElementById('nav-status').addEventListener('click', () => setView('status')); // NEW
+            document.getElementById('nav-net-commission').addEventListener('click', () => setView('net-commission'));
+            setView(currentView); // Initial render
+        }
+
+        function setView(viewName) {
+            currentView = viewName;
+            
+            // Update button styles
+            const navAdd = document.getElementById('nav-add');
+            const navSummary = document.getElementById('nav-summary');
+            const navStatus = document.getElementById('nav-status'); // NEW
+            const navNetCommission = document.getElementById('nav-net-commission');
+
+            const buttons = [navAdd, navSummary, navStatus, navNetCommission];
+
+            buttons.forEach(btn => {
+                if (btn.id === `nav-${viewName}`) {
+                    btn.className = 'px-3 py-2 md:px-6 md:py-3 rounded-xl font-semibold transition-all shadow-md bg-indigo-600 text-white hover:bg-indigo-700';
+                } else {
+                    btn.className = 'px-3 py-2 md:px-6 md:py-3 rounded-xl font-semibold transition-all shadow-md bg-white text-indigo-600 border border-indigo-600 hover:bg-indigo-50';
+                }
+            });
+
+            renderView(viewName);
+        }
+
+        function renderView(viewName) {
+            const contentContainer = document.getElementById('app-content');
+            contentContainer.innerHTML = ''; // Clear current content
+
+            // Unsubscribe from specific listeners if necessary
+            // Note: setupSummaryListener and setupTransactionListener are now global and keep running for real-time updates across all views.
+            
+            if (viewName === 'add') {
+                renderAddTransactionView();
+            } else if (viewName === 'summary') {
+                renderSalesSummaryView();
+            } else if (viewName === 'status') {
+                renderTransactionStatusView(); // NEW
+            } else if (viewName === 'net-commission') {
+                renderNetCommissionView();
+            }
+        }
+
+        // --- Start Application ---
+        window.onload = initFirebase;
+        
+    </script>
+</body>
+</html>
